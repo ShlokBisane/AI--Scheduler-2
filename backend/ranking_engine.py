@@ -12,6 +12,7 @@ Priority Score = Exam Importance × Date Urgency × Subject Difficulty
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional, Tuple
 import math
+from backend.time_utils import today_ist
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -312,7 +313,7 @@ def compute_urgency(exam_date_str: str, reference_date: date = None) -> Tuple[st
     Returns (urgency_key, days_remaining).
     """
     if reference_date is None:
-        reference_date = date.today()
+        reference_date = today_ist()
 
     try:
         exam_date = datetime.strptime(exam_date_str, "%Y-%m-%d").date()
@@ -475,7 +476,7 @@ def rank_subjects(entries: List[SubjectEntry], reference_date: date = None) -> D
     ranked results with scores, reasoning, and recommendations.
     """
     if reference_date is None:
-        reference_date = date.today()
+        reference_date = today_ist()
 
     # Compute scores for all entries
     for entry in entries:
@@ -565,7 +566,7 @@ def rerank_after_missed_day(
     Marks missed topics for higher urgency and generates recovery options.
     """
     if reference_date is None:
-        reference_date = date.today()
+        reference_date = today_ist()
 
     # Boost missed topics' urgency
     for entry in entries:
@@ -651,7 +652,7 @@ def generate_daily_study_order(
     Allocates time proportionally to priority scores.
     """
     if reference_date is None:
-        reference_date = date.today()
+        reference_date = today_ist()
 
     # Rank first
     for entry in entries:

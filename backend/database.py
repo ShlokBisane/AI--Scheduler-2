@@ -9,6 +9,7 @@ import os
 import re
 from datetime import datetime, date, timedelta
 from supabase import create_client, Client
+from backend.time_utils import today_ist
 
 # ─── Supabase Client ────────────────────────────────────────
 
@@ -312,11 +313,46 @@ def delete_schedule_batch_by_id(batch_id: int):
         return {"deleted": 0, "restored": False}
 
 
+def delete_unbatched_schedules():
+    """Delete schedules that do not belong to a batch."""
+    sb = get_client()
+    try:
+        sched_res = sb.table("schedules").select("*").is_(
+            "batch_id", "null"
+        ).execute()
+        schedules = sched_res.data or []
+
+        for d in schedules:
+            sb.table("schedule_history").insert({
+                "original_schedule_id": d["id"],
+                "chat_id": d["chat_id"],
+                "subject": d["subject"],
+                "color": d["color"],
+                "date": d["date"],
+                "start_time": d["start_time"],
+                "end_time": d["end_time"],
+                "session_type": d["session_type"],
+                "topic": d["topic"],
+                "status": d["status"],
+                "priority": d["priority"],
+                "reason": "deleted"
+            }).execute()
+
+        sb.table("schedules").delete().is_("batch_id", "null").execute()
+        return len(schedules)
+    except Exception:
+        return 0
+
+
 def delete_schedule_batch_by_message(message_id: int):
     """Delete schedule batch by message id."""
     batch = get_schedule_batch_by_message(message_id)
     if not batch:
-        return {"deleted": 0, "restored": False}
+        active = get_active_schedule_batch()
+        if active:
+            return delete_schedule_batch_by_id(active["id"])
+        deleted = delete_unbatched_schedules()
+        return {"deleted": deleted, "restored": False}
     return delete_schedule_batch_by_id(batch["id"])
 
 
@@ -405,7 +441,7 @@ def get_calendar_events():
 
 def get_today_tasks():
     """Get today's tasks including nearby dates for context."""
-    today = date.today().isoformat()
+    today = today_ist().isoformat()
     sb = get_client()
     batch_id = _get_active_batch_id()
 
@@ -514,7 +550,7 @@ def delete_schedule(schedule_id):
 
 def expire_past_schedules():
     """Move expired (past date, still pending) schedules to history and mark as missed."""
-    today = date.today().isoformat()
+    today = today_ist().isoformat()
     sb = get_client()
     batch_id = _get_active_batch_id()
 
@@ -676,7 +712,7 @@ def cleanup_orphan_colors():
 
 def get_stress_data():
     """Calculate stress metrics based on schedule density and completion."""
-    today = date.today().isoformat()
+    today = today_ist().isoformat()
     sb = get_client()
     batch_id = _get_active_batch_id()
 

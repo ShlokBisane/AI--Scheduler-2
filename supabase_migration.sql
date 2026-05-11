@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS schedule_history (
     moved_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Backfill support for existing installs
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS batch_id BIGINT;
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules(date);
@@ -95,9 +98,6 @@ CREATE INDEX IF NOT EXISTS idx_history_moved_at ON schedule_history(moved_at);
 CREATE INDEX IF NOT EXISTS idx_schedules_batch_id ON schedules(batch_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_batches_active ON schedule_batches(is_active);
 CREATE INDEX IF NOT EXISTS idx_schedule_batches_created_at ON schedule_batches(created_at);
-
--- Backfill support for existing installs
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS batch_id BIGINT;
 
 -- Seed the settings row
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;

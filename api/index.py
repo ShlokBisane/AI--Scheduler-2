@@ -31,6 +31,7 @@ from backend.database import (
     create_schedule_batch, delete_schedule_batch_by_message,
     unconfirm_schedule_message, get_active_schedule_window
 )
+from backend.time_utils import now_ist, today_ist
 from backend.ai_engine import (
     get_ai_response, stream_ai_response, generate_chat_title,
     extract_schedule_from_response, clean_response_text
@@ -119,7 +120,7 @@ def _get_openrouter_key():
 def _build_calendar_context() -> str:
     """Build a short summary of active calendar blocks for the AI."""
     try:
-        today = date.today()
+        today = today_ist()
         end_date = today + timedelta(days=7)
         sessions = get_active_schedule_window(today.isoformat(), end_date.isoformat())
     except Exception:
@@ -173,9 +174,9 @@ def _parse_time(value: str):
 
 def _sanitize_schedule_sessions(sessions: list) -> list:
     """Remove or adjust sessions that would start in the past."""
-    now = datetime.now()
+    now = now_ist()
     today = now.date()
-    now_time = now.time().replace(second=0, microsecond=0)
+    now_time = now.time().replace(second=0, microsecond=0, tzinfo=None)
     use_next_day = now.hour >= 23
 
     cleaned = []
@@ -376,7 +377,7 @@ async def api_confirm_schedule(data: ConfirmSchedule):
                 chat_id=data.chat_id,
                 subject=s.get("subject", "Unknown"),
                 color=s.get("color", get_subject_color(s.get("subject", "Unknown"))),
-                date_str=s.get("date", date.today().isoformat()),
+                date_str=s.get("date", today_ist().isoformat()),
                 start_time=s.get("start_time", ""),
                 end_time=s.get("end_time", ""),
                 session_type=s.get("type", "study"),
@@ -411,7 +412,8 @@ async def api_delete_schedule(schedule_id: int):
 @app.delete("/api/schedule/batch/{message_id}")
 async def api_delete_schedule_batch(message_id: int):
     result = delete_schedule_batch_by_message(message_id)
-    unconfirm_schedule_message(message_id)
+    if result.get("deleted", 0) > 0:
+        unconfirm_schedule_message(message_id)
     cleanup_orphan_colors()
     return {
         "status": "ok",
@@ -431,7 +433,7 @@ async def api_expire_schedules():
 @app.get("/api/todo/today")
 async def api_get_today():
     result = get_today_tasks()
-    result["date"] = date.today().isoformat()
+    result["date"] = today_ist().isoformat()
     return result
 
 @app.patch("/api/todo/{task_id}")

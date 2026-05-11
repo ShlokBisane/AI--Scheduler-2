@@ -406,6 +406,12 @@ const Chat = (() => {
 
                 try {
                     const result = await Api.deleteScheduleBatch(messageId);
+                    const deletedCount = result && typeof result.deleted_count === 'number'
+                        ? result.deleted_count
+                        : 0;
+                    if (deletedCount <= 0) {
+                        throw new Error('No schedule entries were deleted');
+                    }
 
                     btn.className = 'confirm-btn';
                     btn.textContent = '✓ Confirm & Save to Calendar';

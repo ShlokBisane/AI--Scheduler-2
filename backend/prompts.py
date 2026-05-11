@@ -5,11 +5,12 @@ Dynamic prompts that inject current date, profile context, and ranking data.
 
 from datetime import datetime, date
 import re
+from backend.time_utils import now_ist
 
 
 def get_current_date_context() -> str:
     """Get current date context string for injection into prompts."""
-    now = datetime.now()
+    now = now_ist()
     today = now.strftime("%Y-%m-%d")
     day_name = now.strftime("%A")
     time_str = now.strftime("%I:%M %p")
@@ -27,6 +28,7 @@ def get_current_date_context() -> str:
         f"\n## CURRENT CONTEXT\n"
         f"- Today's date: {today} ({day_name})\n"
         f"- Current time: {time_str}\n"
+        f"- Time zone: Asia/Kolkata (IST)\n"
         f"- Schedules should start from: {start_suggestion} ({start_date})\n"
         f"- If user doesn't specify a start date, begin from {start_suggestion}'s date ({start_date}).\n"
         f"- If it is past 11:00 PM, always start schedule from the NEXT DAY.\n"

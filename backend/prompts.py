@@ -14,8 +14,8 @@ def get_current_date_context() -> str:
     day_name = now.strftime("%A")
     time_str = now.strftime("%I:%M %p")
     
-    # Determine if it's late night (after 10 PM)
-    is_late = now.hour >= 22
+    # Determine if it's late night (after 11 PM)
+    is_late = now.hour >= 23
     start_suggestion = "tomorrow" if is_late else "today"
     
     # Compute tomorrow's date
@@ -29,7 +29,8 @@ def get_current_date_context() -> str:
         f"- Current time: {time_str}\n"
         f"- Schedules should start from: {start_suggestion} ({start_date})\n"
         f"- If user doesn't specify a start date, begin from {start_suggestion}'s date ({start_date}).\n"
-        f"- If it is past 10:00 PM, always start schedule from the NEXT DAY.\n"
+        f"- If it is past 11:00 PM, always start schedule from the NEXT DAY.\n"
+        f"- Never schedule sessions that start before the current time today ({time_str}).\n"
     )
 
 
@@ -221,7 +222,7 @@ CRITICAL: You MUST generate study sessions for EVERY SINGLE DAY from start date 
 
 ### Rules:
 1. Check today's date from CURRENT CONTEXT section
-2. If current time is past 10:00 PM, start from TOMORROW's date
+2. If current time is past 11:00 PM, start from TOMORROW's date
 3. Generate sessions for EACH DAY from start date to (exam_date - 1 day)
 4. On the EXAM DATE itself, add ONE session with type "exam" (this marks it on the calendar)
 5. The day before the exam should be LIGHT REVISION only

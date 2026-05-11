@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Optional, List
 
 # Add project root to Python path for imports
@@ -164,6 +164,58 @@ def _build_calendar_context() -> str:
     )
 
 
+def _parse_time(value: str):
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except Exception:
+        return None
+
+
+def _sanitize_schedule_sessions(sessions: list) -> list:
+    """Remove or adjust sessions that would start in the past."""
+    now = datetime.now()
+    today = now.date()
+    now_time = now.time().replace(second=0, microsecond=0)
+    use_next_day = now.hour >= 23
+
+    cleaned = []
+    for s in sessions or []:
+        if not isinstance(s, dict):
+            continue
+
+        date_str = s.get("date") or today.isoformat()
+        try:
+            session_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            session_date = today
+            date_str = today.isoformat()
+
+        if session_date < today:
+            continue
+        if session_date == today and use_next_day:
+            continue
+
+        if session_date == today:
+            start_str = s.get("start_time", "")
+            end_str = s.get("end_time", "")
+            start_time = _parse_time(start_str)
+            end_time = _parse_time(end_str)
+
+            if start_time and end_time:
+                if end_time <= now_time:
+                    continue
+                if start_time < now_time:
+                    shifted = (now + timedelta(minutes=5)).time().replace(second=0, microsecond=0)
+                    if end_time <= shifted:
+                        continue
+                    s = dict(s)
+                    s["start_time"] = shifted.strftime("%H:%M")
+
+        cleaned.append(s)
+
+    return cleaned
+
+
 # ─── Health ─────────────────────────────────────────────────
 
 @app.get("/api/health")
@@ -311,10 +363,14 @@ async def api_chat_stream(data: ChatMessage):
 
 @app.post("/api/schedule/confirm")
 async def api_confirm_schedule(data: ConfirmSchedule):
+    sessions = _sanitize_schedule_sessions(data.sessions)
+    if not sessions:
+        raise HTTPException(status_code=400, detail="All sessions are in the past. Nothing saved.")
+
     batch_id = create_schedule_batch(data.chat_id, data.message_id)
     confirm_schedule_message(data.message_id)
     saved_count = 0
-    for s in data.sessions:
+    for s in sessions:
         try:
             add_schedule(
                 chat_id=data.chat_id,

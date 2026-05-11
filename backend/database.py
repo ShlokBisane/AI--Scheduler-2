@@ -166,13 +166,168 @@ def confirm_schedule_message(message_id):
     sb.table("messages").update({"confirmed": 1}).eq("id", message_id).execute()
 
 
+def unconfirm_schedule_message(message_id):
+    sb = get_client()
+    sb.table("messages").update({"confirmed": 0}).eq("id", message_id).execute()
+
+
+# ─── Schedule Batches ──────────────────────────────────────
+
+def get_active_schedule_batch():
+    """Get the currently active schedule batch."""
+    sb = get_client()
+    try:
+        result = sb.table("schedule_batches").select("*").eq(
+            "is_active", True
+        ).order("created_at", desc=True).limit(1).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def _get_active_batch_id():
+    batch = get_active_schedule_batch()
+    return batch["id"] if batch else None
+
+
+def get_schedule_batch_by_message(message_id: int):
+    """Get schedule batch for a message id."""
+    sb = get_client()
+    try:
+        result = sb.table("schedule_batches").select("*").eq(
+            "message_id", message_id
+        ).order("created_at", desc=True).limit(1).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def _ensure_legacy_batch_for_unbatched():
+    """Move unbatched schedules into an inactive legacy batch."""
+    sb = get_client()
+    try:
+        unbatched = sb.table("schedules").select("id").is_(
+            "batch_id", "null"
+        ).limit(1).execute()
+    except Exception:
+        return None
+
+    if not unbatched.data:
+        return None
+
+    try:
+        result = sb.table("schedule_batches").insert({"is_active": False}).execute()
+        legacy_id = result.data[0]["id"]
+        sb.table("schedules").update({"batch_id": legacy_id}).is_(
+            "batch_id", "null"
+        ).execute()
+        return legacy_id
+    except Exception:
+        return None
+
+
+def create_schedule_batch(chat_id: int, message_id: int):
+    """Create a new active schedule batch and deactivate the current one."""
+    sb = get_client()
+    _ensure_legacy_batch_for_unbatched()
+
+    try:
+        sb.table("schedule_batches").update({"is_active": False}).eq(
+            "is_active", True
+        ).execute()
+        result = sb.table("schedule_batches").insert({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "is_active": True
+        }).execute()
+        return result.data[0]["id"]
+    except Exception:
+        return None
+
+
+def activate_previous_schedule_batch(exclude_id: int = None):
+    """Activate the most recent inactive schedule batch."""
+    sb = get_client()
+    try:
+        query = sb.table("schedule_batches").select("id").eq(
+            "is_active", False
+        ).order("created_at", desc=True).limit(1)
+        if exclude_id is not None:
+            query = query.neq("id", exclude_id)
+        result = query.execute()
+        if result.data:
+            batch_id = result.data[0]["id"]
+            sb.table("schedule_batches").update({"is_active": True}).eq(
+                "id", batch_id
+            ).execute()
+            return batch_id
+    except Exception:
+        return None
+    return None
+
+
+def delete_schedule_batch_by_id(batch_id: int):
+    """Delete a schedule batch and optionally restore the previous batch."""
+    sb = get_client()
+    try:
+        batch_res = sb.table("schedule_batches").select("*").eq(
+            "id", batch_id
+        ).execute()
+        if not batch_res.data:
+            return {"deleted": 0, "restored": False}
+        batch = batch_res.data[0]
+        was_active = bool(batch.get("is_active", False))
+
+        sched_res = sb.table("schedules").select("*").eq(
+            "batch_id", batch_id
+        ).execute()
+        schedules = sched_res.data or []
+
+        for d in schedules:
+            sb.table("schedule_history").insert({
+                "original_schedule_id": d["id"],
+                "chat_id": d["chat_id"],
+                "subject": d["subject"],
+                "color": d["color"],
+                "date": d["date"],
+                "start_time": d["start_time"],
+                "end_time": d["end_time"],
+                "session_type": d["session_type"],
+                "topic": d["topic"],
+                "status": d["status"],
+                "priority": d["priority"],
+                "reason": "deleted"
+            }).execute()
+
+        sb.table("schedules").delete().eq("batch_id", batch_id).execute()
+        sb.table("schedule_batches").delete().eq("id", batch_id).execute()
+
+        restored = False
+        if was_active:
+            restored_id = activate_previous_schedule_batch(exclude_id=batch_id)
+            restored = restored_id is not None
+
+        return {"deleted": len(schedules), "restored": restored}
+    except Exception:
+        return {"deleted": 0, "restored": False}
+
+
+def delete_schedule_batch_by_message(message_id: int):
+    """Delete schedule batch by message id."""
+    batch = get_schedule_batch_by_message(message_id)
+    if not batch:
+        return {"deleted": 0, "restored": False}
+    return delete_schedule_batch_by_id(batch["id"])
+
+
 # ─── Schedules ──────────────────────────────────────────────
 
 def add_schedule(chat_id, subject, color, date_str, start_time, end_time,
-                 session_type="study", topic="", priority=3):
+                 session_type="study", topic="", priority=3, batch_id=None):
     sb = get_client()
     data = {
         "chat_id": chat_id,
+        "batch_id": batch_id,
         "subject": subject,
         "color": color,
         "date": date_str,
@@ -182,6 +337,8 @@ def add_schedule(chat_id, subject, color, date_str, start_time, end_time,
         "topic": topic,
         "priority": priority
     }
+    if batch_id is None:
+        data.pop("batch_id", None)
     result = sb.table("schedules").insert(data).execute()
 
     # Upsert subject color
@@ -195,9 +352,13 @@ def add_schedule(chat_id, subject, color, date_str, start_time, end_time,
 
 def get_schedules_for_date(date_str):
     sb = get_client()
-    result = sb.table("schedules").select("*").eq(
+    query = sb.table("schedules").select("*").eq(
         "date", date_str
-    ).order("start_time").execute()
+    ).order("start_time")
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
     return result.data
 
 
@@ -205,9 +366,13 @@ def get_calendar_events():
     """Get all dates that have scheduled events with their subject colors.
        Excludes breaks from dot display. Marks exam dates."""
     sb = get_client()
-    result = sb.table("schedules").select(
+    query = sb.table("schedules").select(
         "date, subject, color, session_type"
-    ).order("date").execute()
+    ).order("date")
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
 
     calendar = {}
     for row in result.data:
@@ -242,11 +407,15 @@ def get_today_tasks():
     """Get today's tasks including nearby dates for context."""
     today = date.today().isoformat()
     sb = get_client()
+    batch_id = _get_active_batch_id()
 
     # Today's tasks
-    result = sb.table("schedules").select("*").eq(
+    query = sb.table("schedules").select("*").eq(
         "date", today
-    ).order("start_time").execute()
+    ).order("start_time")
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
     tasks = result.data
 
     pending = sum(1 for t in tasks if t['status'] == 'pending')
@@ -255,11 +424,14 @@ def get_today_tasks():
     missed = sum(1 for t in tasks if t['status'] == 'missed')
 
     # Get overdue tasks from past dates
-    overdue_result = sb.table("schedules").select("*").lt(
+    overdue_query = sb.table("schedules").select("*").lt(
         "date", today
     ).eq("status", "pending").neq(
         "session_type", "break"
-    ).order("date").order("start_time").execute()
+    ).order("date").order("start_time")
+    if batch_id:
+        overdue_query = overdue_query.eq("batch_id", batch_id)
+    overdue_result = overdue_query.execute()
     overdue = overdue_result.data
 
     # Get next upcoming task
@@ -292,13 +464,29 @@ def update_task_status(task_id, status):
 
 def get_all_schedules():
     sb = get_client()
-    result = sb.table("schedules").select("*").order("date").order("start_time").execute()
+    query = sb.table("schedules").select("*").order("date").order("start_time")
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
     return result.data
 
 
 def delete_schedules_for_chat(chat_id):
     sb = get_client()
-    sb.table("schedules").delete().eq("chat_id", chat_id).execute()
+    try:
+        batches = sb.table("schedule_batches").select("id").eq(
+            "chat_id", chat_id
+        ).execute()
+        for b in batches.data or []:
+            delete_schedule_batch_by_id(b["id"])
+
+        # Clean up any unbatched schedules for this chat
+        sb.table("schedules").delete().eq("chat_id", chat_id).is_(
+            "batch_id", "null"
+        ).execute()
+    except Exception:
+        sb.table("schedules").delete().eq("chat_id", chat_id).execute()
 
 
 def delete_schedule(schedule_id):
@@ -328,11 +516,15 @@ def expire_past_schedules():
     """Move expired (past date, still pending) schedules to history and mark as missed."""
     today = date.today().isoformat()
     sb = get_client()
+    batch_id = _get_active_batch_id()
 
     # Get expired pending schedules (non-break)
-    result = sb.table("schedules").select("*").lt(
+    query = sb.table("schedules").select("*").lt(
         "date", today
-    ).eq("status", "pending").neq("session_type", "break").execute()
+    ).eq("status", "pending").neq("session_type", "break")
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
 
     moved_count = 0
     for d in result.data:
@@ -354,7 +546,12 @@ def expire_past_schedules():
         moved_count += 1
 
     # Remove old break sessions
-    sb.table("schedules").delete().lt("date", today).eq("session_type", "break").execute()
+    break_query = sb.table("schedules").delete().lt(
+        "date", today
+    ).eq("session_type", "break")
+    if batch_id:
+        break_query = break_query.eq("batch_id", batch_id)
+    break_query.execute()
 
     return moved_count
 
@@ -379,6 +576,25 @@ def move_schedule_to_history(schedule_id, reason='completed'):
             "priority": d['priority'],
             "reason": reason
         }).execute()
+
+
+def get_active_schedule_window(start_date: str = None, end_date: str = None):
+    """Get active schedule sessions within a date window for context."""
+    sb = get_client()
+    query = sb.table("schedules").select(
+        "date, start_time, end_time, subject, session_type, topic"
+    ).order("date").order("start_time")
+
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    if start_date:
+        query = query.gte("date", start_date)
+    if end_date:
+        query = query.lte("date", end_date)
+
+    result = query.execute()
+    return result.data
 
 
 # ─── History ────────────────────────────────────────────────
@@ -431,7 +647,11 @@ def update_subject_color(subject: str, new_color: str):
 def remove_subject_color(subject: str):
     """Remove a subject color when no more schedules exist for it."""
     sb = get_client()
-    result = sb.table("schedules").select("id").eq("subject", subject).limit(1).execute()
+    query = sb.table("schedules").select("id").eq("subject", subject).limit(1)
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        query = query.eq("batch_id", batch_id)
+    result = query.execute()
     if not result.data:
         sb.table("subject_colors").delete().eq("subject", subject).execute()
 
@@ -440,7 +660,11 @@ def cleanup_orphan_colors():
     """Remove subject colors that have no active schedules."""
     sb = get_client()
     colors = sb.table("subject_colors").select("subject").execute()
-    schedules = sb.table("schedules").select("subject").execute()
+    sched_query = sb.table("schedules").select("subject")
+    batch_id = _get_active_batch_id()
+    if batch_id:
+        sched_query = sched_query.eq("batch_id", batch_id)
+    schedules = sched_query.execute()
 
     active_subjects = set(r['subject'] for r in schedules.data)
     protected = {'Break', 'Long Break'}
@@ -454,9 +678,13 @@ def get_stress_data():
     """Calculate stress metrics based on schedule density and completion."""
     today = date.today().isoformat()
     sb = get_client()
+    batch_id = _get_active_batch_id()
 
     # All non-break schedules
-    all_result = sb.table("schedules").select("*").neq("session_type", "break").execute()
+    all_query = sb.table("schedules").select("*").neq("session_type", "break")
+    if batch_id:
+        all_query = all_query.eq("batch_id", batch_id)
+    all_result = all_query.execute()
     all_schedules = all_result.data
 
     total_all = len(all_schedules)

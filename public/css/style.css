@@ -891,6 +891,28 @@ body {
     box-shadow: 0 2px 8px rgba(16,185,129,0.3);
 }
 
+.schedule-delete-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 16px;
+    background: rgba(239,68,68,0.08);
+    color: var(--red);
+    border: 1px solid rgba(239,68,68,0.35);
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+.schedule-delete-btn:hover {
+    background: rgba(239,68,68,0.15);
+}
+.schedule-delete-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 /* ─── Typing Indicator ───────────────────────────────────── */
 .typing-indicator {
     display: flex;

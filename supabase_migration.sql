@@ -34,10 +34,20 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Schedule batches table (versioned schedules)
+CREATE TABLE IF NOT EXISTS schedule_batches (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT REFERENCES chats(id) ON DELETE SET NULL,
+    message_id BIGINT REFERENCES messages(id) ON DELETE SET NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Schedules table
 CREATE TABLE IF NOT EXISTS schedules (
     id BIGSERIAL PRIMARY KEY,
     chat_id BIGINT REFERENCES chats(id) ON DELETE SET NULL,
+    batch_id BIGINT REFERENCES schedule_batches(id) ON DELETE SET NULL,
     subject TEXT NOT NULL,
     color TEXT DEFAULT '#4A90D9',
     date TEXT NOT NULL,
@@ -82,6 +92,12 @@ CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules(date);
 CREATE INDEX IF NOT EXISTS idx_schedules_chat_id ON schedules(chat_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status);
 CREATE INDEX IF NOT EXISTS idx_history_moved_at ON schedule_history(moved_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_batch_id ON schedules(batch_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_batches_active ON schedule_batches(is_active);
+CREATE INDEX IF NOT EXISTS idx_schedule_batches_created_at ON schedule_batches(created_at);
+
+-- Backfill support for existing installs
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS batch_id BIGINT;
 
 -- Seed the settings row
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
@@ -90,3 +106,10 @@ INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 -- ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
 -- etc.
+ALTER TABLE chats DISABLE ROW LEVEL SECURITY;
+ALTER TABLE messages DISABLE ROW LEVEL SECURITY;
+ALTER TABLE schedules DISABLE ROW LEVEL SECURITY;
+ALTER TABLE settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE subject_colors DISABLE ROW LEVEL SECURITY;
+ALTER TABLE schedule_history DISABLE ROW LEVEL SECURITY;
+ALTER TABLE schedule_batches DISABLE ROW LEVEL SECURITY;

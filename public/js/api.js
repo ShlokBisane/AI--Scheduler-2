@@ -142,6 +142,10 @@ const Api = {
         return this.request(`/api/schedule/${scheduleId}`, { method: 'DELETE' });
     },
 
+    async deleteScheduleBatch(messageId) {
+        return this.request(`/api/schedule/batch/${messageId}`, { method: 'DELETE' });
+    },
+
     async expireSchedules() {
         return this.request('/api/schedule/expire', { method: 'POST' });
     },

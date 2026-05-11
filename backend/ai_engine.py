@@ -73,12 +73,15 @@ def stream_openrouter(api_key: str, messages: List[Dict], model: str = "openai/g
 # ─── Unified Interface ──────────────────────────────────────
 
 def build_messages(chat_messages: List[Dict], mode: str = "student",
-                   profile: dict = None) -> List[Dict]:
+                   profile: dict = None, calendar_context: str = "") -> List[Dict]:
     """Build message list with system prompt for API call."""
     if mode == "teacher":
         system_prompt = build_teacher_prompt(profile)
     else:
         system_prompt = build_student_prompt(profile)
+
+    if calendar_context:
+        system_prompt += calendar_context
     
     messages = [{"role": "system", "content": system_prompt}]
     
@@ -92,16 +95,18 @@ def build_messages(chat_messages: List[Dict], mode: str = "student",
 
 
 def get_ai_response(api_key: str, messages: List[Dict],
-                    mode: str = "student", profile: dict = None) -> str:
+                    mode: str = "student", profile: dict = None,
+                    calendar_context: str = "") -> str:
     """Get full AI response using OpenRouter."""
-    formatted = build_messages(messages, mode, profile)
+    formatted = build_messages(messages, mode, profile, calendar_context)
     return chat_openrouter(api_key, formatted)
 
 
 def stream_ai_response(api_key: str, messages: List[Dict],
-                       mode: str = "student", profile: dict = None) -> Generator[str, None, None]:
+                       mode: str = "student", profile: dict = None,
+                       calendar_context: str = "") -> Generator[str, None, None]:
     """Stream AI response using OpenRouter."""
-    formatted = build_messages(messages, mode, profile)
+    formatted = build_messages(messages, mode, profile, calendar_context)
     yield from stream_openrouter(api_key, formatted)
 
 

@@ -324,9 +324,12 @@ const Chat = (() => {
             sessionsHtml = sessions.map(s => renderSessionRow(s)).join('');
         }
 
-        const confirmBtnHtml = isConfirmed
-            ? `<button class="confirm-btn confirmed" disabled>✓ Saved to Calendar</button>`
-            : `<button class="confirm-btn" data-message-id="${messageId}" data-chat-id="${chatId}">✓ Confirm & Save to Calendar</button>`;
+        const confirmBtnText = isConfirmed ? '✓ Saved to Calendar' : '✓ Confirm & Save to Calendar';
+        const confirmBtnClass = isConfirmed ? 'confirm-btn confirmed' : 'confirm-btn';
+        const confirmBtnDisabled = isConfirmed ? 'disabled' : '';
+        const deleteBtnHtml = isConfirmed && messageId
+            ? `<button class="schedule-delete-btn" data-message-id="${messageId}" data-chat-id="${chatId}">Delete from Calendar</button>`
+            : '';
 
         card.innerHTML = `
             <div class="schedule-card-header">
@@ -334,32 +337,95 @@ const Chat = (() => {
                 <span style="font-size:12px; color: var(--text-tertiary)">${studySessions.length} study sessions · ${dates.length} day${dates.length > 1 ? 's' : ''}</span>
             </div>
             <div class="schedule-sessions">${sessionsHtml}</div>
-            <div class="schedule-card-footer">${confirmBtnHtml}</div>
+            <div class="schedule-card-footer">
+                <button class="${confirmBtnClass}" data-message-id="${messageId}" data-chat-id="${chatId}" ${confirmBtnDisabled}>${confirmBtnText}</button>
+                ${deleteBtnHtml}
+            </div>
         `;
 
-        // Confirm button handler
-        if (!isConfirmed) {
-            const btn = card.querySelector('.confirm-btn');
-            btn.addEventListener('click', async () => {
+        // Confirm button handler (always attach)
+        const btn = card.querySelector('.confirm-btn');
+        btn.addEventListener('click', async () => {
+            if (btn.disabled || btn.classList.contains('confirmed')) return;
+            if (!messageId || !chatId) {
+                showToast('Missing schedule metadata');
+                return;
+            }
+
+            try {
+                btn.disabled = true;
+                btn.textContent = 'Saving...';
+
+                await Api.confirmSchedule(messageId, chatId, sessions);
+
+                btn.className = 'confirm-btn confirmed';
+                btn.textContent = '✓ Saved to Calendar';
+                btn.disabled = true;
+                ensureDeleteButton();
+                showToast('Schedule saved to calendar!', 'success');
+
+                // Refresh sidebar
+                Calendar.refresh();
+                Todo.refresh();
+                Stress.refresh();
+                if (typeof History !== 'undefined') History.refresh();
+            } catch (err) {
+                btn.disabled = false;
+                btn.textContent = '✓ Confirm & Save to Calendar';
+                showToast('Failed to save: ' + err.message);
+            }
+        });
+
+        // Delete button handler
+        const existingDeleteBtn = card.querySelector('.schedule-delete-btn');
+        if (existingDeleteBtn) {
+            attachDeleteHandler(existingDeleteBtn);
+        }
+
+        function ensureDeleteButton() {
+            if (!messageId) return;
+            const footer = card.querySelector('.schedule-card-footer');
+            if (footer.querySelector('.schedule-delete-btn')) return;
+            const delBtn = document.createElement('button');
+            delBtn.className = 'schedule-delete-btn';
+            delBtn.dataset.messageId = messageId;
+            delBtn.dataset.chatId = chatId;
+            delBtn.textContent = 'Delete from Calendar';
+            footer.appendChild(delBtn);
+            attachDeleteHandler(delBtn);
+        }
+
+        function attachDeleteHandler(deleteBtn) {
+            deleteBtn.addEventListener('click', async () => {
+                if (!messageId) return;
+                if (!confirm('Remove this schedule from calendar?')) return;
+
+                const originalText = deleteBtn.textContent;
+                deleteBtn.disabled = true;
+                deleteBtn.textContent = 'Deleting...';
+
                 try {
-                    btn.disabled = true;
-                    btn.textContent = 'Saving...';
+                    const result = await Api.deleteScheduleBatch(messageId);
 
-                    await Api.confirmSchedule(messageId, chatId, sessions);
+                    btn.className = 'confirm-btn';
+                    btn.textContent = '✓ Confirm & Save to Calendar';
+                    btn.disabled = false;
+                    deleteBtn.remove();
 
-                    btn.className = 'confirm-btn confirmed';
-                    btn.textContent = '✓ Saved to Calendar';
-                    showToast('Schedule saved to calendar!', 'success');
+                    const restored = result && result.restored;
+                    const msg = restored
+                        ? 'Schedule removed. Previous schedule restored.'
+                        : 'Schedule removed from calendar.';
+                    showToast(msg, 'success');
 
-                    // Refresh sidebar
                     Calendar.refresh();
                     Todo.refresh();
                     Stress.refresh();
                     if (typeof History !== 'undefined') History.refresh();
                 } catch (err) {
-                    btn.disabled = false;
-                    btn.textContent = '✓ Confirm & Save to Calendar';
-                    showToast('Failed to save: ' + err.message);
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = originalText;
+                    showToast('Failed to delete schedule: ' + err.message);
                 }
             });
         }

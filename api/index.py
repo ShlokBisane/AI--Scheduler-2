@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional, List
 
 # Add project root to Python path for imports
@@ -27,7 +27,9 @@ from backend.database import (
     get_today_tasks, update_task_status, get_all_schedules,
     delete_schedules_for_chat, delete_schedule, expire_past_schedules,
     get_history, clear_history, get_subject_colors, update_subject_color,
-    get_stress_data, cleanup_orphan_colors, init_db
+    get_stress_data, cleanup_orphan_colors, init_db,
+    create_schedule_batch, delete_schedule_batch_by_message,
+    unconfirm_schedule_message, get_active_schedule_window
 )
 from backend.ai_engine import (
     get_ai_response, stream_ai_response, generate_chat_title,
@@ -112,6 +114,54 @@ def _get_openrouter_key():
     if settings and settings.get('openrouter_api_key'):
         return settings.get('openrouter_api_key')
     return DEFAULT_OPENROUTER_KEY
+
+
+def _build_calendar_context() -> str:
+    """Build a short summary of active calendar blocks for the AI."""
+    try:
+        today = date.today()
+        end_date = today + timedelta(days=7)
+        sessions = get_active_schedule_window(today.isoformat(), end_date.isoformat())
+    except Exception:
+        return ""
+
+    if not sessions:
+        return ""
+
+    grouped = {}
+    for s in sessions:
+        if s.get("session_type") == "break":
+            continue
+        date_str = s.get("date")
+        if not date_str:
+            continue
+        grouped.setdefault(date_str, []).append(s)
+
+    if not grouped:
+        return ""
+
+    lines = []
+    for date_str in sorted(grouped.keys()):
+        day_sessions = grouped[date_str]
+        blocks = []
+        for s in day_sessions[:6]:
+            start = s.get("start_time", "")
+            end = s.get("end_time", "")
+            subj = s.get("subject", "Task")
+            if start and end:
+                blocks.append(f"{start}-{end} {subj}")
+        if blocks:
+            more = " ..." if len(day_sessions) > 6 else ""
+            lines.append(f"- {date_str}: " + "; ".join(blocks) + more)
+
+    if not lines:
+        return ""
+
+    return (
+        "\n## EXISTING CALENDAR (AVOID CONFLICTS)\n"
+        + "\n".join(lines)
+        + "\n- Do not overlap these time blocks. If needed, ask for free slots.\n"
+    )
 
 
 # ─── Health ─────────────────────────────────────────────────
@@ -210,6 +260,7 @@ async def api_chat_stream(data: ChatMessage):
     add_message(chat_id, "user", data.content)
     history = get_messages(chat_id)
     msg_list = [{"role": m["role"], "content": m["content"]} for m in history if m["role"] != "system"]
+    calendar_context = _build_calendar_context()
 
     async def event_stream():
         full_response = ""
@@ -217,7 +268,7 @@ async def api_chat_stream(data: ChatMessage):
             # Send chat_id first as meta
             yield f"data: {json.dumps({'type': 'meta', 'chat_id': chat_id})}\n\n"
 
-            for chunk in stream_ai_response(api_key, msg_list, mode, profile):
+            for chunk in stream_ai_response(api_key, msg_list, mode, profile, calendar_context):
                 full_response += chunk
                 yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
 
@@ -260,6 +311,7 @@ async def api_chat_stream(data: ChatMessage):
 
 @app.post("/api/schedule/confirm")
 async def api_confirm_schedule(data: ConfirmSchedule):
+    batch_id = create_schedule_batch(data.chat_id, data.message_id)
     confirm_schedule_message(data.message_id)
     saved_count = 0
     for s in data.sessions:
@@ -273,13 +325,15 @@ async def api_confirm_schedule(data: ConfirmSchedule):
                 end_time=s.get("end_time", ""),
                 session_type=s.get("type", "study"),
                 topic=s.get("topic", ""),
-                priority=s.get("priority", 3)
+                priority=s.get("priority", 3),
+                batch_id=batch_id
             )
             saved_count += 1
         except Exception as e:
             print(f"Error saving session: {e}")
 
-    return {"status": "ok", "saved_count": saved_count}
+    cleanup_orphan_colors()
+    return {"status": "ok", "saved_count": saved_count, "batch_id": batch_id}
 
 @app.get("/api/schedule/calendar")
 async def api_get_calendar():
@@ -297,6 +351,17 @@ async def api_delete_schedule(schedule_id: int):
     delete_schedule(schedule_id)
     cleanup_orphan_colors()
     return {"status": "ok"}
+
+@app.delete("/api/schedule/batch/{message_id}")
+async def api_delete_schedule_batch(message_id: int):
+    result = delete_schedule_batch_by_message(message_id)
+    unconfirm_schedule_message(message_id)
+    cleanup_orphan_colors()
+    return {
+        "status": "ok",
+        "deleted_count": result.get("deleted", 0),
+        "restored": result.get("restored", False)
+    }
 
 @app.post("/api/schedule/expire")
 async def api_expire_schedules():
